@@ -27,6 +27,7 @@ import org.apache.nifi.logging.ComponentLog;
 import org.apache.nifi.processor.exception.ProcessException;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.reporting.InitializationException;
+import org.json.JSONObject;
 import org.opcfoundation.ua.application.Client;
 import org.opcfoundation.ua.application.SessionChannel;
 import org.opcfoundation.ua.builtintypes.*;
@@ -405,7 +406,7 @@ public class StandardOPCUAService extends AbstractControllerService implements O
     }
 
     @Override
-    public byte[] getValue(List<String> reqTagnames, String returnTimestamp, String excludeNullValue, String nullValueString) throws ProcessException {
+    public byte[] getValue(List<String> reqTagnames, String returnTimestamp, String excludeNullValue, String nullValueString, String dataFormat, boolean longTimestamp) throws ProcessException {
         final ComponentLog logger = getLogger();
 
         //Create the nodes to read array
@@ -438,41 +439,16 @@ public class StandardOPCUAService extends AbstractControllerService implements O
                 if (values.length == 0) {
                     logger.error("OPC Server returned nothing.");
                 } else {
-                    // Iterate through values
-                    for (int i = 0; i < values.length; i++) {
-                        String valueLine = "";
-                        try {
-                            // Build flowfile line
-                            if (excludeNullValue.equals("Yes") && values[i].getValue().toString().equals(nullValueString)) {
-                                logger.debug("Null value returned for " + values[i].getValue().toString() + " -- Skipping because property is set");
-                                continue;
-                            }
-
-                            valueLine += nodesToRead[i].getNodeId().toString() + ",";
-
-                            if (returnTimestamp.equals("ServerTimestamp") || returnTimestamp.equals("Both")) {
-                                valueLine += values[i].getServerTimestamp().toString() + ",";
-                            }
-                            if (returnTimestamp.equals("SourceTimestamp") || returnTimestamp.equals("Both")) {
-                                valueLine += values[i].getSourceTimestamp().toString() + ",";
-                            }
-
-                            valueLine += values[i].getValue().toString() + ","
-                                    + values[i].getStatusCode().getValue().toString()
-                                    + System.getProperty("line.separator");
-
-                        } catch (Exception ex) {
-                            logger.error("Error parsing result for" + nodesToRead[i].getNodeId().toString());
-                            valueLine = "";
-                        }
-                        if (valueLine.isEmpty())
-                            continue;
-
-                        serverResponse += valueLine;
+                    // Build Response according to Data Format
+                    switch (dataFormat) {
+                        case "CSV" :
+                            serverResponse = getDataInCSV(nodesToRead, values, returnTimestamp, excludeNullValue, nullValueString, longTimestamp);
+                            serverResponse.trim();
+                            break;
+                        case "JSON" :
+                            serverResponse = getDataInJSON(nodesToRead, values, returnTimestamp, excludeNullValue, nullValueString, longTimestamp);
+                            break;
                     }
-
-                    //clean up response
-                    serverResponse.trim();
                 }
             }
 
@@ -497,6 +473,87 @@ public class StandardOPCUAService extends AbstractControllerService implements O
 
         return stringBuilder.toString();
 
+    }
+
+    private String getDataInCSV(ReadValueId nodesToRead[], DataValue values[], String returnTimestamp, String excludeNullValue, String nullValueString, boolean longTimestamp) {
+        String serverResponse = "";
+        for (int i = 0; i < values.length; i++) {
+            String valueLine = "";
+            try {
+                // Build flowfile line
+                if (excludeNullValue.equals("true") && values[i].getValue().toString().equals(nullValueString)) {
+                    getLogger().debug("Null value returned for " + values[i].getValue().toString() + " -- Skipping because property is set");
+                    continue;
+                }
+
+                valueLine += nodesToRead[i].getNodeId().toString() + ",";
+                valueLine += getTimeStamp(values[i], returnTimestamp, longTimestamp) + ",";
+                valueLine += values[i].getValue().toString() + ","
+                          + values[i].getStatusCode().getValue().toString()
+                          + System.getProperty("line.separator");
+
+            } catch (Exception ex) {
+                getLogger().error("Error parsing result for" + nodesToRead[i].getNodeId().toString());
+                valueLine = "";
+            }
+            if (valueLine.isEmpty())
+                continue;
+
+            serverResponse += valueLine;
+        }
+        return serverResponse;
+    }
+
+    private String getDataInJSON(ReadValueId nodesToRead[], DataValue values[], String returnTimestamp, String excludeNullValue, String nullValueString, boolean longTimestamp) {
+        JSONObject jsonObject = new JSONObject();
+        Object ts = null;
+        for (int i = 0; i < values.length; i++) {
+            try {
+                // Add JSON Object for sensor values
+                if (excludeNullValue.equals("true") && values[i].getValue().toString().equals(nullValueString)) {
+                    getLogger().debug("Null value returned for " + values[i].getValue().toString() + " -- Skipping because property is set");
+                    continue;
+                }
+
+                ts = getTimeStamp(values[i], returnTimestamp, longTimestamp);
+                String[] key = nodesToRead[i].getNodeId().toString().split("\\.");
+                jsonObject.put(key[key.length - 1], values[i].getValue().toString());
+
+            } catch (Exception ex) {
+                getLogger().error("Error parsing result for" + nodesToRead[i].getNodeId().toString());
+            }
+        }
+
+        // Building JSON Data
+        JSONObject finalJsonObject = new JSONObject()
+                                    .put("ts", ts)
+                                    .put("values", jsonObject);
+
+        return finalJsonObject.toString();
+    }
+
+    private Object getTimeStamp(DataValue value, String returnTimestamp, boolean longTimestamp) throws Exception{
+        Object ts = null;
+        // Get Timestamp
+        try {
+            if (returnTimestamp.equals("ServerTimestamp")) {
+                if (longTimestamp) {
+                    ts = value.getServerTimestamp().getTimeInMillis();
+                } else {
+                    ts = value.getServerTimestamp().toString();
+                }
+            }
+            if (returnTimestamp.equals("SourceTimestamp")) {
+                if (longTimestamp) {
+                    ts = value.getSourceTimestamp().getTimeInMillis();
+                } else {
+                    ts = value.getSourceTimestamp().toString();
+                }
+            }
+        } catch (Exception ex) {
+            throw ex;
+        }
+        return ts;
     }
 
     private boolean validateEndpoint(Client client, String security_policy, String discoveryServer, String url) {

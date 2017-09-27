@@ -69,7 +69,7 @@ public class GetOPCData extends AbstractProcessor {
             .Builder().name("Return Timestamp")
             .description("Allows to select the source, server, or both timestamps")
             .required(true)
-            .allowableValues("SourceTimestamp", "ServerTimestamp","Both")
+            .allowableValues("SourceTimestamp", "ServerTimestamp")
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .build();
 	 
@@ -81,6 +81,26 @@ public class GetOPCData extends AbstractProcessor {
 	            .defaultValue("false")
 	            .addValidator(StandardValidators.BOOLEAN_VALIDATOR)
 	            .build();
+
+    public static final PropertyDescriptor DATA_FORMAT = new PropertyDescriptor
+            .Builder().name("DATA_FORMAT")
+            .displayName("Data Format")
+            .description("The format the data should be in, either CSV or JSON")
+            .required(true)
+            .allowableValues("JSON","CSV")
+            .defaultValue("JSON")
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+            .build();
+
+    public static final PropertyDescriptor LONG_TIMESTAMP = new PropertyDescriptor
+            .Builder().name("LONG_TIMESTAMP")
+            .displayName("Use Long Timestamp")
+            .description("If True it will use number of milliseconds from the epoch, if not it will use an ISO8601 compatable timestamp.")
+            .required(true)
+            .allowableValues("true","false")
+            .defaultValue("false")
+            .addValidator(StandardValidators.BOOLEAN_VALIDATOR)
+            .build();
 
     public static final PropertyDescriptor NULL_VALUE_STRING = new PropertyDescriptor
             .Builder().name("Null Value String")
@@ -110,7 +130,8 @@ public class GetOPCData extends AbstractProcessor {
         descriptors.add(RETURN_TIMESTAMP);
         descriptors.add(EXCLUDE_NULL_VALUE);
         descriptors.add(NULL_VALUE_STRING);
-        
+        descriptors.add(DATA_FORMAT);
+        descriptors.add(LONG_TIMESTAMP);
         this.descriptors = Collections.unmodifiableList(descriptors);
 
         final Set<Relationship> relationships = new HashSet<Relationship>();
@@ -192,8 +213,13 @@ public class GetOPCData extends AbstractProcessor {
         	logger.debug("Session update failed");
         }
 
-        byte[] values = opcUAService.getValue(requestedTagnames.get(),timestamp.get(),excludeNullValue.get(),nullValueString.get());
+        byte[] values = opcUAService.getValue(requestedTagnames.get(),timestamp.get(),excludeNullValue.get(),nullValueString.get(), context.getProperty(DATA_FORMAT).getValue(), context.getProperty(LONG_TIMESTAMP).asBoolean());
 
+        // Updating content-type if Data format is JSON
+        if (context.getProperty(DATA_FORMAT).getValue().toString().equals("JSON")) {
+            session.putAttribute(flowFile, "mime.type", "application/json");
+        }
+        
   		// Write the results back out to flow file
         try{
         flowFile = session.write(flowFile, new OutputStreamCallback() {
